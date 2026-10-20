@@ -461,3 +461,22 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .tour-note[data-arrow="above"]::after { bottom: -7px; left: var(--ax); margin-left: -6px; border-left: 0; border-top: 0; }
 .tour-note[data-arrow="right"]::after { left: -7px; top: var(--ay); margin-top: -6px; border-right: 0; border-top: 0; }
 .tour-note[data-arrow="left"]::after  { right: -7px; top: var(--ay); margin-top: -6px; border-left: 0; border-bottom: 0; }
+
+/* ---------- A plain modal, for About ----------
+   Separate from .tour because a tour step points at something and this does
+   not; sharing the class would mean one of them fighting the other's rules. */
+.modal { position: fixed; inset: 0; z-index: 210; display: grid; place-items: center; }
+.modal-dim { position: absolute; inset: 0; background: rgba(12, 18, 24, .55); }
+.modal-card {
+  position: relative; background: var(--sheet); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 10px; padding: 20px 22px;
+  box-shadow: 0 12px 36px rgba(0,0,0,.28); width: min(420px, calc(100vw - 32px));
+}
+.modal-card h2 { margin: 0 0 12px; font-size: 18px; font-weight: 700; }
+.modal-card footer { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+.modal-card .grow { flex: 1; }
+.about-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; margin: 0 0 14px; font-size: 14px; }
+.about-grid dt { color: var(--muted); }
+.about-grid dd { margin: 0; font-variant-numeric: tabular-nums; }
+.about-state { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
+.about-state.stale { color: var(--accent); font-weight: 500; }

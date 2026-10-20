@@ -12,6 +12,7 @@ import { loadProject } from './data.js';
 import { sheetHTML, sheetRooms, sheetRoom, sheetIndex, stepSheet, exportDocx, roomTitle } from './sheetview.js';
 import { peersHTML, paintPeers } from './presence.js';
 import { startTour, maybeStartTour } from './tour.js';
+import { showAbout } from './about.js';
 
 // One sheet per room, in the order the Instance tab has them, narrowed to the
 // selection when there is one. A whole project at once would be hundreds of
@@ -91,6 +92,7 @@ export function renderProject(keepUI) {
         <button id="settings-btn" class="icon" aria-haspopup="true" aria-expanded="false" aria-label="Settings" title="Settings">\u2699</button>
         <div class="pop" id="settings-pop" hidden>
           <button id="tour-again">Show me how this works</button>
+          <button id="about-btn">About &amp; version</button>
           <button id="signout">Sign out</button>
         </div>
       </div>
@@ -166,6 +168,7 @@ export function wireProject() {
     };
     spop.onclick = e => e.stopPropagation();
     document.getElementById('tour-again').onclick = () => { shut(); startTour(); };
+    document.getElementById('about-btn').onclick = () => { shut(); showAbout(); };
   }
 
   // The sheet was just rebuilt, so anyone else's cells need drawing again.

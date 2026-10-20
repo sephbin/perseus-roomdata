@@ -1,0 +1,31 @@
+#!/bin/sh
+# Stamp the build number into the page before every commit.
+#
+# BUILD is the commit count that this commit is about to become, so it rises by
+# one each time and never repeats. A browser tab holds on to the modules it
+# loaded, so "the fix is pushed" and "they are running the fix" are different
+# things; this is what lets the About panel tell them apart.
+#
+# Enable it once per clone -- hooks are not cloned:
+#   git config core.hooksPath .githooks
+set -e
+
+n=$(( $(git rev-list --count HEAD 2>/dev/null || echo 0) + 1 ))
+d=$(date +%Y-%m-%d)
+f=public/app/version.js
+
+cat > "$f" <<EOF
+// Written by .githooks/pre-commit on every commit. Don't edit it by hand --
+// your change would be overwritten by the next commit anyway.
+//
+// BUILD is the commit count, so it only ever goes up and two people can tell
+// at a glance which of them is behind. That is the whole point of it: a tab
+// left open keeps the modules it loaded, so "I pushed the fix" and "they are
+// running the fix" are different claims, and the About panel is how you tell
+// them apart without guessing.
+export const BUILD = $n;
+export const BUILT = '$d';
+export const VERSION = '0.1.$n';
+EOF
+
+git add "$f"

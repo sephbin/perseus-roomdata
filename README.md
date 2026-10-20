@@ -48,6 +48,7 @@ Sign in, create a project, then use the admin buttons:
 - **Deleting rooms:** select them, then *Delete rooms*.
 - **Who else is here:** a coloured circle appears beside your name for everyone with the job open — hover one to see who. While they work you'll see their cells outlined in their colour, so two people don't quietly type over each other. It's live and none of it is saved; close the tab and the circle goes.
 - **The tour:** runs itself the first time you open a project. The gear in the top right has it again whenever you want it, along with sign out.
+- **About & version:** also under the gear. It shows which build this tab is running and checks the server for a newer one. If someone reports a bug you've already fixed, this is the first thing to ask them — a browser tab holds on to the code it loaded when it opened, so they can be hours behind without any sign of it. If it says a newer build is available, *Reload now* picks it up.
 
 Every change is recorded in the `value_history` table.
 
