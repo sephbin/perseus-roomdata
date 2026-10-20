@@ -1,7 +1,7 @@
 // The project shell: the bar, the toolbar, the drawer slot, and the wiring for
 // everything that isn't inside the grid itself.
 import { sb } from './client.js';
-import { app, state, isAdmin, myEmail, dColor, typeName, roomLabel, typeTree, saveUI, applyUI, discLabel } from './state.js';
+import { app, state, isAdmin, myEmail, dColor, typeName, roomLabel, typeTree, saveUI, applyUI, discLabel, typeByName, parentChoices } from './state.js';
 import { esc, toast, friendly } from './util.js';
 import {
   gridHTML, applyWidths, paintGrid, paintSearch, paintSelection, wireGridDrag,
@@ -64,6 +64,50 @@ const shutMenu = () => {
 addEventListener('click', shutMenu);
 addEventListener('keydown', e => e.key === 'Escape' && shutMenu());
 
+// The pager buttons sit in the toolbar and survive a sheet redraw; the wheel
+// listener is on the sheet itself and does not, so this runs again after every
+// paintSheet(). Both use onclick rather than addEventListener so calling it
+// twice can't stack handlers.
+export function wireSheet() {
+  const prev = document.getElementById('sheet-prev'), next = document.getElementById('sheet-next');
+  if (prev) prev.onclick = () => turnPage(-1);
+  if (next) next.onclick = () => turnPage(1);
+  if (state.subject !== 'sheet') return;
+
+  // The wheel turns pages rather than scrolling, because a sheet is a page and
+  // there is nothing below it to scroll to. A trackpad fires a burst of small
+  // deltas per gesture, so they are accumulated to a threshold and rate limited
+  // -- otherwise one flick would skip twenty rooms.
+  const sheets = document.getElementById('sheets');
+  if (!sheets) return;
+  let acc = 0, last = 0;
+  sheets.onwheel = e => {
+    e.preventDefault();
+    const now = Date.now();
+    if (now - last > 400) acc = 0;              // a new gesture
+    acc += e.deltaY;
+    if (Math.abs(acc) < 60 || now - last < 160) return;
+    last = now;
+    const by = acc > 0 ? 1 : -1;
+    acc = 0;
+    turnPage(by);
+  };
+}
+
+// Redraw the sheet and its pager in place. Searching does this on every
+// keystroke, so it must not disturb anything the person is typing into.
+export function paintSheet() {
+  const wrap = document.getElementById('grid-wrap');
+  if (wrap) wrap.innerHTML = sheetsHTML();
+  const pos = document.querySelector('.pager .pos');
+  const who = document.querySelector('.pager .who');
+  const n = sheetRooms().length;
+  if (pos) pos.textContent = n ? `${sheetIndex() + 1} of ${n}` : '0';
+  if (who) who.textContent = sheetRoom() ? roomTitle(sheetRoom()) : '';
+  fitSheet();
+  wireSheet();
+}
+
 export function renderProject(keepUI) {
   const wrap = document.getElementById('grid-wrap');
   const scroll = keepUI && wrap ? [wrap.scrollLeft, wrap.scrollTop] : [0, 0];
@@ -124,11 +168,9 @@ export function renderProject(keepUI) {
   <div class="selbar" id="selbar" hidden>
     <span id="sel-count"></span>
     ${state.subject !== 'types' && state.types.length ? `
-    <select id="sel-type" aria-label="Give the selected rooms a type">
-      <option value="">Set type…</option>
-      <option value="__none">— no type —</option>
-      ${typeTree().map(t => `<option value="${t.id}">${'\u00a0\u00a0'.repeat(t.depth)}${esc(t.name)}</option>`).join('')}
-    </select>` : ''}
+    <input id="sel-type" list="type-names" placeholder="Set type…"
+      aria-label="Give the selected rooms a type" autocomplete="off">
+    <button id="sel-untype" title="Remove the type from the selected rooms">No type</button>` : ''}
     <small class="muted">Ctrl+D fills these rooms from the cell you’re in</small>
     <button id="sel-clear">Clear</button>
     <button class="danger" id="sel-delete">Delete rooms</button>
@@ -197,6 +239,11 @@ export function wireProject() {
   });
   document.getElementById('search').oninput = e => {
     state.search = e.target.value;
+    // On the sheets view there are no rows to grey out -- searching changes
+    // which rooms the pager steps through, so the page itself has to be
+    // redrawn. Only the sheet and the pager are touched, because rebuilding
+    // the toolbar would take the search box, and the cursor in it, with it.
+    if (state.subject === 'sheet') { state.sheetAt = 0; return paintSheet(); }
     paintSearch();
   };
   document.querySelectorAll('[data-subject]').forEach(b => b.onclick = () => {
@@ -224,31 +271,7 @@ export function wireProject() {
   if (exportCsv) exportCsv.onclick = exportCSV;
   const exportWord = document.getElementById('export-docx');
   if (exportWord) exportWord.onclick = () => exportDocx(sheetRooms());
-  const prev = document.getElementById('sheet-prev'), next = document.getElementById('sheet-next');
-  if (prev) prev.onclick = () => turnPage(-1);
-  if (next) next.onclick = () => turnPage(1);
-
-  // The wheel turns pages rather than scrolling, because a sheet is a page and
-  // there is nothing below it to scroll to. A trackpad fires a burst of small
-  // deltas per gesture, so they are accumulated to a threshold and rate limited
-  // -- otherwise one flick would skip twenty rooms.
-  if (state.subject === 'sheet') {
-    const sheets = document.getElementById('sheets');
-    if (sheets) {
-      let acc = 0, last = 0;
-      sheets.addEventListener('wheel', e => {
-        e.preventDefault();
-        const now = Date.now();
-        if (now - last > 400) acc = 0;          // a new gesture
-        acc += e.deltaY;
-        if (Math.abs(acc) < 60 || now - last < 160) return;
-        last = now;
-        const by = acc > 0 ? 1 : -1;
-        acc = 0;
-        turnPage(by);
-      }, { passive: false });
-    }
-  }
+  wireSheet();
   document.querySelectorAll('[data-drawer]').forEach(b => b.onclick = () => renderDrawer(b.dataset.drawer));
 
   const g = document.getElementById('grid-wrap');
@@ -256,17 +279,31 @@ export function wireProject() {
 
   // Giving many rooms a type at once. Nothing is overwritten: a room that has
   // its own value for a column keeps it, and only inherited cells change.
-  const selType = document.getElementById('sel-type');
-  if (selType) selType.onchange = async () => {
-    const ids = [...state.selected], choice = selType.value;
-    selType.value = '';
-    if (!ids.length || !choice) return;
-    const type_id = choice === '__none' ? null : choice;
+  // Same picker as the cells: type to narrow the list rather than scrolling a
+  // hundred names. Clearing a whole selection is its own button, because an
+  // empty box here would otherwise mean both "I haven't chosen yet" and
+  // "remove the type", and the first is far more common.
+  const setTypeOn = async type_id => {
+    const ids = [...state.selected];
+    if (!ids.length) return;
     const { error } = await sb.from('rooms').update({ type_id }).in('id', ids);
     if (error) return toast(friendly(error), true);
     const n = `${ids.length} room${ids.length === 1 ? '' : 's'}`;
     toast(type_id ? `${n} set to ${typeName(type_id)}` : `Type cleared on ${n}`);
     loadProject(state.projectId, true);
+  };
+  const selType = document.getElementById('sel-type');
+  if (selType) selType.onchange = async () => {
+    const typed = selType.value.trim();
+    if (!typed) return;
+    const t = typeByName(typed);
+    if (!t) { selType.value = ''; return toast(`No room type called “${typed}”`, true); }
+    selType.value = '';
+    await setTypeOn(t.id);
+  };
+  const selUntype = document.getElementById('sel-untype');
+  if (selUntype) selUntype.onclick = () => {
+    if (state.selected.size) setTypeOn(null);
   };
 
   document.getElementById('sel-clear').onclick = () => { state.selected = new Set(); paintSelection(); };
@@ -290,20 +327,39 @@ export function wireProject() {
 
     // The room's type: changing it changes every value the room inherits.
     if (e.target.classList.contains('rtype')) {
-      const id = e.target.dataset.room, type_id = e.target.value || null;
+      const id = e.target.dataset.room;
+      const was = () => typeName(state.rooms.find(r => r.id === id)?.type_id);
+      const typed = e.target.value.trim();
+      // The box carries a name now, so a name has to become a type. Anything
+      // that isn't one goes back to what it was rather than silently clearing.
+      const t = typed ? typeByName(typed) : null;
+      if (typed && !t) { e.target.value = was(); return toast(`No room type called “${typed}”`, true); }
+      const type_id = t ? t.id : null;
+      if ((state.rooms.find(r => r.id === id)?.type_id || null) === type_id) return;
       const { error } = await sb.from('rooms').update({ type_id }).eq('id', id);
-      if (error) { e.target.value = state.rooms.find(r => r.id === id)?.type_id || ''; return toast(friendly(error), true); }
+      if (error) { e.target.value = was(); return toast(friendly(error), true); }
       toast(type_id ? `Room type set to ${typeName(type_id)}` : 'Room type cleared');
       return loadProject(state.projectId, true);
     }
     // Re-parenting a type moves every value its descendants inherit.
     if (e.target.classList.contains('tparent')) {
-      const id = e.target.dataset.type, parent_id = e.target.value || null;
-      const { error } = await sb.from('room_types').update({ parent_id }).eq('id', id);
-      if (error) {
-        e.target.value = state.types.find(t => t.id === id)?.parent_id || '';
-        return toast(friendly(error), true);
+      const id = e.target.dataset.type;
+      const me = state.types.find(t => t.id === id);
+      const was = () => typeName(me?.parent_id);
+      const typed = e.target.value.trim();
+      const t = typed ? typeByName(typed) : null;
+      if (typed && !t) { e.target.value = was(); return toast(`No room type called “${typed}”`, true); }
+      // The list offers every type, so the loop check that used to be built
+      // into the options has to happen here. The database guards it too; this
+      // is so the answer is immediate and says what is wrong.
+      if (t && !parentChoices(me).some(x => x.id === t.id)) {
+        e.target.value = was();
+        return toast(`${t.name} sits beneath ${me.name}, so it can’t also be its parent`, true);
       }
+      const parent_id = t ? t.id : null;
+      if ((me?.parent_id || null) === parent_id) return;
+      const { error } = await sb.from('room_types').update({ parent_id }).eq('id', id);
+      if (error) { e.target.value = was(); return toast(friendly(error), true); }
       toast(parent_id ? `Now inherits from ${typeName(parent_id)}` : 'No longer inherits from anything');
       return loadProject(state.projectId, true);
     }

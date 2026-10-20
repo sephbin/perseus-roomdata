@@ -172,7 +172,13 @@ table.grid { border-collapse: separate; border-spacing: 0; background: var(--she
 
 .grid .stick { position: sticky; z-index: 1; background: var(--sheet); }
 .grid thead .stick { z-index: 3; }
-.grid .c-code { left: 0; min-width: 104px; max-width: 104px; }
+/* The leftmost frozen column pins itself. Every other one needs an offset
+   measured at runtime by layoutFrozen(), but this one is always at zero -- and
+   a sticky cell whose `left` is still `auto` does not stick at all, it just
+   scrolls. Leaving the first column to JS meant that if layoutFrozen hadn't
+   run, or ran against a half-built grid, the frozen zone silently came apart. */
+.grid .c-first { left: 0; }
+.grid .c-code { min-width: 104px; max-width: 104px; }
 .grid .froz { min-width: 170px; }
 .grid .froz-last { border-right: 1px solid var(--line-strong); }
 .grid td.ro, .grid td.fixed { padding: 7px 10px; background: var(--ro); color: var(--ink); white-space: nowrap; }
@@ -480,3 +486,42 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .about-grid dd { margin: 0; font-variant-numeric: tabular-nums; }
 .about-state { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
 .about-state.stale { color: var(--accent); font-weight: 500; }
+
+/* The Room column collapsed to a bare handle. It keeps its width as a drag
+   target -- it is what you pull down to select rooms, every other cell being
+   an input that would fight the drag -- but gives up the id itself. The full
+   id stays on hover, and still leads the CSV export. */
+.grid th.c-code.bare, .grid td.c-code.bare {
+  width: 20px; min-width: 20px; max-width: 20px;
+  padding-left: 0; padding-right: 0;
+}
+.grid td.c-code.bare { cursor: grab; }
+.grid tbody tr:hover td.c-code.bare { background: var(--sel); }
+/* Visually hidden, still read aloud: the column header keeps its name for
+   anyone using a screen reader. */
+.sr {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}
+
+/* The Set type box in the selection bar. It is an input rather than a select
+   so it can be typed into, which means it needs the width a select got from
+   its widest option. */
+.selbar #sel-type {
+  width: 200px; padding: 5px 8px; border-radius: 6px;
+  border: 1px solid var(--line-strong); background: var(--sheet); color: var(--ink);
+  font: inherit; font-size: 13px;
+}
+.selbar #sel-type::placeholder { color: var(--muted); }
+
+/* Rooms-of-this-type: its own column on the Types sheet, so it can be sorted
+   and filtered like any other. Narrow, right-aligned and tabular, because it
+   is a column of numbers to be compared down the page. */
+.grid .c-rooms { min-width: 88px; max-width: 88px; text-align: right; }
+.grid td.c-rooms { padding: 6px 10px; }
+.tcount {
+  font-size: 12px; font-weight: 600; color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.tcount small { font-weight: 400; color: var(--muted); margin-left: 3px; font-size: 11px; }
+.tcount.none { color: var(--muted); opacity: .5; }

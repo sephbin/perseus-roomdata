@@ -3,7 +3,7 @@
 // the drag listeners are wired here rather than in view.js.
 import {
   state, isAdmin, canEdit, dColor, sheet, visibleFields, visibleRows,
-  frozenFields, gridColumns, shortId, typeName, parentChoices,
+  frozenFields, gridColumns, shortId, typeName, typesAZ, typeRoomCounts,
   orderedRows, visibleIds, sortDir, isFiltered, cycleSort, columnValues, keyField, rowById,
   saveUI, discLabel,
 } from './state.js';
@@ -14,6 +14,21 @@ import { emit } from './bus.js';
 // the import key if one is set -- a Revit UniqueId, say -- and the first 8
 // characters of the row's own primary key otherwise. The real id is always on
 // hover and always leads the CSV export.
+// Rooms of this type, shown beside its name. A parent shows what sits beneath
+// it as well -- "2 +38" -- because the second number is the one that says how
+// much a change here will move.
+function countBadge(counts, t) {
+  if (!counts) return '';
+  const mine = counts.direct.get(t.id) || 0;
+  const all = counts.total.get(t.id) || 0;
+  const below = all - mine;
+  if (!all) return '<span class="tcount none" title="No rooms use this type">0</span>';
+  const title = below
+    ? `${mine} room${mine === 1 ? '' : 's'} of this type, ${below} more in types beneath it`
+    : `${mine} room${mine === 1 ? '' : 's'} of this type`;
+  return `<span class="tcount" title="${esc(title)}">${mine}${below ? `<small>+${below}</small>` : ''}</span>`;
+}
+
 function handleText(r) {
   const kf = keyField();
   const v = kf ? state.values.get(key(r.id, kf.id))?.value : null;
@@ -56,7 +71,7 @@ export function gridHTML() {
   // '__name' and '__type' address the two fixed columns that aren't fields.
   // The two fixed columns at the left aren't fields, so they get reserved keys
   // -- the same ones sorting uses.
-  const leadKeys = s.types ? ['__name', '__parent'] : ['__code', '__type'];
+  const leadKeys = s.types ? ['__name', '__parent', '__rooms'] : ['__code', '__type'];
   const colKeys = [...leadKeys, ...froz.map(f => f.id), ...fs.map(f => f.id)];
   const cols = `<colgroup>${colKeys.map(k =>
     `<col data-colkey="${k}" ${state.widths[k] ? `style="width:${state.widths[k]}px"` : ''}>`).join('')}${
@@ -71,10 +86,19 @@ export function gridHTML() {
       `<button class="hfilt ${isFiltered(k) ? 'on' : ''}" data-filter="${k}" aria-label="Filter ${esc(label)}">\u25be</button>${extra}${grip(k)}`;
   };
 
+  // One datalist for the whole sheet rather than one per row: 500 rooms would
+  // otherwise mean 500 copies of the same list. Alphabetical, because this is
+  // for finding a name, not for reading the tree.
+  const counts = s.types ? typeRoomCounts() : null;
+
+  const typeList = `<datalist id="type-names">${typesAZ().map(t =>
+    `<option value="${esc(t.name)}">`).join('')}</datalist>`;
+
   const head = `
   <thead>
     <tr class="groups">
-      ${s.types ? '<th class="stick c-type"></th>' : '<th class="stick c-code"></th>'}<th class="stick c-type"></th>
+      ${s.types ? '<th class="stick c-first c-type"></th>' : `<th class="stick c-first c-code ${state.hideRoomId ? 'bare' : ''}"></th>`}<th class="stick c-type"></th>${
+        s.types ? '<th class="stick c-rooms"></th>' : ''}
       ${froz.map((f, i) => `<th class="stick froz ${i === froz.length - 1 ? 'froz-last' : ''}" style="--dc:${dColor(f.discipline)}">${
         i && froz[i - 1].discipline === f.discipline ? '' : esc(f.discipline)}</th>`).join('')}
       ${groups.map((g, i) => `<th colspan="${g.n}" style="--dc:${dColor(g.d)}">${
@@ -83,8 +107,9 @@ export function gridHTML() {
     </tr>
     <tr class="labels">
       ${s.types
-        ? `<th class="stick c-type">${headLabel('__name', 'Type')}</th><th class="stick c-type">Inherits from${grip('__parent')}</th>`
-        : `<th class="stick c-code">Room${grip('__code')}</th><th class="stick c-type">${headLabel('__type', 'Room type')}</th>`}
+        ? `<th class="stick c-first c-type">${headLabel('__name', 'Type')}</th><th class="stick c-type">Inherits from${grip('__parent')}</th>`
+          + `<th class="stick c-rooms" title="Rooms using this type, including any in types beneath it">${headLabel('__rooms', 'Rooms')}</th>`
+        : `<th class="stick c-first c-code ${state.hideRoomId ? 'bare' : ''}">${state.hideRoomId ? '<span class="sr">Room</span>' : 'Room'}${state.hideRoomId ? '' : grip('__code')}</th><th class="stick c-type">${headLabel('__type', 'Room type')}</th>`}
       ${froz.map((f, i) => `<th class="stick froz ${i === froz.length - 1 ? 'froz-last' : ''} ${canEdit(f) ? '' : 'locked'}">${headLabel(f.id, f.label)}</th>`).join('')}
       ${fs.map(f => `<th class="${canEdit(f) ? '' : 'locked'}">${headLabel(f.id, f.label, f.type === 'select' ? '<small>Choose from list</small>' : '')}</th>`).join('')}
       ${admin ? '<th></th>' : ''}
@@ -92,15 +117,15 @@ export function gridHTML() {
   </thead>`;
 
   const leadCells = r => s.types
-    ? `<td class="stick c-type ed"><input class="cell tname" data-type="${r.id}" value="${esc(r.name)}" aria-label="Type name" style="padding-left:${10 + (r.depth || 0) * 18}px" ${admin ? '' : 'readonly'}></td>`
+    ? `<td class="stick c-first c-type ed"><input class="cell tname" data-type="${r.id}" value="${esc(r.name)}" aria-label="Type name" style="padding-left:${10 + (r.depth || 0) * 18}px" ${admin ? '' : 'readonly'}></td>`
       + `<td class="stick c-type ${admin ? 'ed' : 'ro'}">${admin
-        ? `<select class="cell tparent" data-type="${r.id}" aria-label="Inherits from"><option value="">—</option>${parentChoices(r).map(x =>
-            `<option value="${x.id}" ${x.id === r.parent_id ? 'selected' : ''}>${'\u00a0\u00a0'.repeat(x.depth)}${esc(x.name)}</option>`).join('')}</select>`
+        ? `<input class="cell tparent" list="type-names" data-type="${r.id}" aria-label="Inherits from" placeholder="—" value="${esc(typeName(r.parent_id))}">`
         : esc(typeName(r.parent_id))}</td>`
-    : `<td class="stick c-code"><span class="tag" title="${esc(handleTitle(r))}">${esc(handleText(r))}</span></td>`
+      + `<td class="stick c-rooms ro">${countBadge(counts, r)}</td>`
+    : `<td class="stick c-first c-code ${state.hideRoomId ? 'bare' : ''}" title="${esc(handleTitle(r))}">${
+        state.hideRoomId ? '' : `<span class="tag">${esc(handleText(r))}</span>`}</td>`
       + `<td class="stick c-type ${admin ? 'ed' : 'ro'}">${admin
-        ? `<select class="cell rtype" data-room="${r.id}" aria-label="Room type"><option value=""></option>${state.types.map(t =>
-            `<option value="${t.id}" ${t.id === r.type_id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>`
+        ? `<input class="cell rtype" list="type-names" data-room="${r.id}" aria-label="Room type" placeholder="—" value="${esc(typeName(r.type_id))}">`
         : esc(typeName(r.type_id))}</td>`;
 
   const body = rs.map(r => `
@@ -111,7 +136,7 @@ export function gridHTML() {
       ${admin ? `<td class="act"><button data-del-${s.types ? 'type' : 'room'}="${r.id}" title="Delete ${esc(s.label(r))}" aria-label="Delete ${esc(s.label(r))}">✕</button></td>` : ''}
     </tr>`).join('');
 
-  return `<table class="grid ${admin ? 'can-select' : ''}">${cols}${head}<tbody>${body}</tbody></table>
+  return typeList + `<table class="grid ${admin ? 'can-select' : ''}">${cols}${head}<tbody>${body}</tbody></table>
     <div class="empty" id="no-match" hidden><p class="muted">Nothing matches “<b></b>”.</p></div>`;
 }
 
@@ -411,6 +436,10 @@ export function applyWidths() {
     th.style.width = th.style.minWidth = th.style.maxWidth = w ? w + 'px' : '';
   });
   layoutFrozen();
+  // Again once the browser has settled: a web font arriving, or a scrollbar
+  // appearing, changes the widths these offsets were measured from, and a
+  // frozen zone measured against the wrong widths is worse than none.
+  requestAnimationFrame(layoutFrozen);
 }
 
 let resizing = null;

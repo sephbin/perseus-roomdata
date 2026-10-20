@@ -15,7 +15,22 @@ import { loadProject } from './data.js';
 // permission prompt, and a paste straight out of Excel arrives as plain TSV.
 export const inFocusedCell = () => document.activeElement?.classList?.contains('cell');
 
+// These three listeners are on the document, so they also see events meant for
+// the drawers, the search box and anything else with a text box in it. Whatever
+// is typed into one of those belongs to it: a schedule pasted into "Paste many
+// rooms" must not land in the sheet, and Backspace in a text box must not clear
+// the cells that happen to be selected behind it. Grid cells are themselves
+// inputs, which is why this asks where the element is rather than what it is.
+const typingOffSheet = e => {
+  const el = (e?.target instanceof Element ? e.target : null) || document.activeElement;
+  if (!el) return false;
+  const editable = el.isContentEditable
+    || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT';
+  return editable && !el.closest('#grid-wrap');
+};
+
 addEventListener('copy', e => {
+  if (typingOffSheet(e)) return;
   const cells = rangeCells();
   if (!cells.length) return;
   // Text highlighted inside a cell is the user's own selection; leave it be.
@@ -31,6 +46,7 @@ addEventListener('copy', e => {
 });
 
 addEventListener('paste', e => {
+  if (typingOffSheet(e)) return;
   if (!state.cellA) return;
   const text = e.clipboardData.getData('text/plain');
   if (!text) return;
@@ -45,6 +61,7 @@ addEventListener('paste', e => {
 // following it rather than being left blank.
 addEventListener('keydown', e => {
   if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  if (typingOffSheet(e)) return;
   const cells = rangeCells();
   if (!cells.length) return;
   // A single cell you're typing in is ordinary text editing, not a range.

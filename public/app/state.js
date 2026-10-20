@@ -15,6 +15,10 @@ export const state = {
   // Who else has this project open. Lives only as long as the tab does -- it
   // comes from the Realtime channel, never from the database.
   peers: new Map(),
+  // The Room column collapses to a bare handle rather than disappearing: it is
+  // what you drag down to select rooms, because every other cell holds an
+  // input that would fight the drag. Per browser, per project, like widths.
+  hideRoomId: false,
 };
 
 export const myEmail = () => (state.session?.user?.email || '').toLowerCase();
@@ -138,14 +142,20 @@ export function typeCell(t, f) {
 
 // Depth-first, so the Types sheet reads as the tree it is. `depth` drives the
 // indent; any type whose parent has vanished is shown at the top rather than lost.
+// Depth-first, with each set of siblings in order among themselves -- so a
+// child never leaves its parent and the indent keeps meaning what it says.
+// Alphabetical unless a column sort says otherwise: a type list is something
+// people scan for a name, and sort_order only records what order types
+// happened to be created in, which is no use to anyone reading it.
 export function typeTree(cmp) {
+  const order = cmp || ((a, b) => byNatural(a.name, b.name));
   const kids = new Map();
   state.types.forEach(t => {
     const k = t.parent_id && state.types.some(x => x.id === t.parent_id) ? t.parent_id : '';
     if (!kids.has(k)) kids.set(k, []);
     kids.get(k).push(t);
   });
-  if (cmp) kids.forEach(list => list.sort(cmp));
+  kids.forEach(list => list.sort(order));
   const out = [];
   const walk = (parent, depth) => (kids.get(parent) || []).forEach(t => {
     out.push({ ...t, depth });
@@ -156,6 +166,46 @@ export function typeTree(cmp) {
 }
 
 // Types that may become `t`'s parent: anything that isn't itself or below it.
+// Types are unique by name per project, so a name is as good as an id for
+// finding one -- and a name is what someone can actually type. Matched without
+// regard to case or surrounding space, like everywhere else names are matched.
+export const typeByName = n => {
+  const want = String(n ?? '').trim().toLowerCase();
+  return want ? state.types.find(t => t.name.trim().toLowerCase() === want) || null : null;
+};
+// Flat and alphabetical, for the pickers -- the tree is no use in a datalist.
+export const typesAZ = () => state.types.slice().sort((a, b) => byNatural(a.name, b.name));
+
+// How many rooms each type carries. Direct is the rooms assigned to that type
+// itself; total includes everything beneath it, because a parent type with no
+// rooms of its own can still be setting values for a hundred of them, and
+// reporting 0 against it would be a lie by omission.
+// Memoised: the sort comparator asks for this once per comparison, and walking
+// every room each time would turn a click into a freeze. loadProject replaces
+// both arrays wholesale, so comparing their identity is a sound way to notice
+// that the answer has changed.
+let countCache = null, countRooms = null, countTypes = null;
+export function typeRoomCounts() {
+  if (countCache && countRooms === state.rooms && countTypes === state.types) return countCache;
+  const direct = new Map();
+  state.rooms.forEach(r => {
+    if (!r.type_id) return;
+    direct.set(r.type_id, (direct.get(r.type_id) || 0) + 1);
+  });
+  const total = new Map(direct);
+  // Walk deepest-first so a child's total is finished before its parent adds it.
+  const byDepth = typeTree().slice().sort((a, b) => b.depth - a.depth);
+  byDepth.forEach(t => {
+    if (!t.parent_id) return;
+    const mine = total.get(t.id) || 0;
+    if (mine) total.set(t.parent_id, (total.get(t.parent_id) || 0) + mine);
+  });
+  countRooms = state.rooms;
+  countTypes = state.types;
+  countCache = { direct, total };
+  return countCache;
+}
+
 export function parentChoices(t) {
   const below = new Set([t.id]);
   let grew = true;
@@ -173,7 +223,7 @@ export function parentChoices(t) {
 export function sheet() {
   const types = state.subject === 'types';
   return types ? {
-    types: true, lead: 2, table: 'type_values', idCol: 'type_id', cache: state.typeValues,
+    types: true, lead: 3, table: 'type_values', idCol: 'type_id', cache: state.typeValues,
     rows: () => typeTree(),
     label: t => t.name,
     cellOf: typeCell,
@@ -199,6 +249,10 @@ export const cellText = (row, f) => sheet().cellOf(row, f).value ?? '';
 export function sortKey(row, k) {
   if (k === '__name') return row.name ?? '';
   if (k === '__type') return typeName(row.type_id);
+  // Sorted and filtered on the total, descendants included: that is the number
+  // that says how much a change to this type will move, and for a type with no
+  // children it is the same as its own count anyway.
+  if (k === '__rooms') return String(typeRoomCounts().total.get(row.id) || 0);
   const f = state.fields.find(x => x.id === k);
   return f ? cellText(row, f) : '';
 }
@@ -274,6 +328,7 @@ export function saveUI() {
     sort: state.sort,
     filters: [...state.filters].map(([k, v]) => [k, [...v]]),
     widths: state.widths,
+    hideRoomId: state.hideRoomId,
   };
   try { localStorage.setItem(uiKey(), JSON.stringify(all)); } catch { /* private window, full disk */ }
 }
@@ -291,6 +346,7 @@ export function applyUI(keepSubject) {
   state.sort = mine.sort && mine.sort.k ? mine.sort : null;
   state.filters = new Map((mine.filters || []).map(([k, v]) => [k, new Set(v)]));
   state.widths = mine.widths && typeof mine.widths === 'object' ? mine.widths : {};
+  state.hideRoomId = !!mine.hideRoomId;
 }
 
 export const sortDir = k => (state.sort && state.sort.k === k ? state.sort.dir : 0);
