@@ -52,7 +52,7 @@ function initials(email) {
 
 // ---------- the channel ----------
 
-let channel = null, mine = null, sendTimer = null, pending = false;
+let channel = null, mine = null, sendTimer = null, pending = false, beat = null, failed = false;
 
 export function startPresence(projectId) {
   stopPresence();
@@ -73,7 +73,30 @@ export function startPresence(projectId) {
       paintPeerStrip();
       paintPeers();
     })
-    .subscribe(status => { if (status === 'SUBSCRIBED') track(); });
+    // This fires again on every rejoin, not just the first time. A dropped
+    // socket makes the server forget we were ever here, so re-announcing on
+    // each join is what stops someone going quietly invisible to everyone else
+    // while their own page still reads as connected.
+    .subscribe(status => { if (status === 'SUBSCRIBED') announce(); });
+
+  // Laptops suspend, wifi drops, and a rejoin we somehow don't hear about would
+  // leave us absent from everyone's screen with no way to notice. One message
+  // every half minute buys presence that heals itself.
+  beat = setInterval(announce, 30000);
+  addEventListener('visibilitychange', onShow);
+}
+
+// Coming back to the tab is the commonest moment to have been dropped while
+// away, and the one where being missing is most obvious to everyone else.
+function onShow() { if (document.visibilityState === 'visible') announce(); }
+
+// Say where I am right now, ignoring the throttle -- for when the connection
+// may have forgotten us, as opposed to when the selection merely moved.
+function announce() {
+  clearTimeout(sendTimer);
+  sendTimer = null;
+  pending = false;
+  track();
 }
 
 export function stopPresence() {
@@ -82,8 +105,10 @@ export function stopPresence() {
   mine = null;
   state.peers = new Map();
   clearTimeout(sendTimer);
-  sendTimer = null;
-  pending = false;
+  clearInterval(beat);
+  removeEventListener('visibilitychange', onShow);
+  sendTimer = beat = null;
+  pending = failed = false;
 }
 
 // Dragging across a block of cells fires on every cell it crosses, so what goes
@@ -94,7 +119,14 @@ const SEND_EVERY = 250;
 function track() {
   if (!channel || !mine) return;
   if (sendTimer) { pending = true; return; }
-  channel.track(mine);
+  // track() answers 'ok', 'timed out' or 'error'. Throwing that away was the
+  // original bug in miniature: a failed announce leaves us invisible to
+  // everyone else and the page has no other way of finding out. One retry,
+  // then leave it to the heartbeat rather than hammering a sick connection.
+  channel.track(mine).then(status => {
+    if (status === 'ok') { failed = false; return; }
+    if (!failed) { failed = true; setTimeout(announce, 1000); }
+  }).catch(() => {});
   sendTimer = setTimeout(() => {
     sendTimer = null;
     if (pending) { pending = false; track(); }

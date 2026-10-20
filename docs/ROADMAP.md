@@ -6,7 +6,17 @@ Ordered roughly by priority. Each item is sized to be a single focused task.
 
 1. ~~**Move config out of index.html.**~~ Done: `public/app/config.js` holds the URL and publishable key and nothing else.
 2. ~~**Restrict project creation.**~~ Done: `project_creators` is an allowlist of emails, checked by `can_create_project()` inside `create_project()`. Existing admins were seeded into it. Adding someone is still a SQL insert — a People-drawer control for it is item 20.
-3. **Set up the Supabase CLI.** Link the repo to the project so migrations are applied with `supabase db push` instead of pasting SQL.
+3. **Set up the Supabase CLI.** Half done. `supabase init` has been run, so `supabase/config.toml` exists and matches the remote (Postgres 17). All ten migrations are applied to the live database and verified object by object, but they were pasted into the SQL editor, so `supabase_migrations.schema_migrations` does not exist and Supabase has no record of them. Two commands need a human, because they ask for credentials:
+   ```
+   npx supabase login
+   npx supabase link --project-ref rkzarmniystqcpitacgl      # asks for the database password
+   ```
+   Then mark the ten as already applied, rather than letting `db push` try to run them against a schema that already has them:
+   ```
+   npx supabase migration repair --status applied 20261019000000 20261019010000 20261019020000      20261019030000 20261019040000 20261019050000 20261019060000 20261019070000      20261020000000 20261020010000
+   npx supabase migration list      # local and remote should agree, ten each
+   ```
+   From then on a new migration is `npx supabase db push`, and the SQL editor is for reading only.
 4. **Deploy.** Static hosting (Netlify, Cloudflare Pages or GitHub Pages). Add the deployed URL to Supabase Auth → URL Configuration.
 5. **Custom SMTP.** Document the chosen provider and the template changes (`{{ .Token }}` in Magic Link and Confirm Signup).
 
