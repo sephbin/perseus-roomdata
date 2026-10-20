@@ -4,7 +4,7 @@
 import { sb } from './client.js';
 import { app, state, myEmail, isAdmin, applyUI, ALL_DISC } from './state.js';
 import { key, esc, byNatural, toast, friendly, fetchAll, displayValue, stamp } from './util.js';
-import { flash, refreshColumn } from './grid.js';
+import { flash, refreshColumn, refreshCells } from './grid.js';
 import { rerender } from './bus.js';
 import { startPresence } from './presence.js';
 
@@ -114,6 +114,15 @@ export function subscribe(id) {
 // one column -- far short of a reason to reload the project and throw away
 // where someone was scrolled to.
 export function onRemoteTypeValue(payload) {
+  // A delete carries the old row, not a new one -- clearing a type default
+  // removes the row rather than storing a blank, so this is the ordinary path,
+  // not an edge case.
+  if (payload.eventType === 'DELETE') {
+    const gone = payload.old;
+    if (!gone || !gone.type_id) return;
+    state.typeValues.delete(key(gone.type_id, gone.field_id));
+    return refreshColumn(gone.field_id);
+  }
   const row = payload.new;
   if (!row || !row.type_id) return;
   state.typeValues.set(key(row.type_id, row.field_id), row);
@@ -121,6 +130,19 @@ export function onRemoteTypeValue(payload) {
 }
 
 export function onRemoteValue(payload) {
+  // Clearing a cell deletes its row so the room goes back to following its
+  // type, which means a delete has to redraw rather than blank: what shows
+  // next is whatever the type says, and only refreshCells works that out.
+  if (payload.eventType === 'DELETE') {
+    const gone = payload.old;
+    if (!gone || !gone.room_id) return;
+    state.values.delete(key(gone.room_id, gone.field_id));
+    const td = document.querySelector(`td[data-r="${gone.room_id}"][data-f="${gone.field_id}"]`);
+    if (td?.querySelector('.cell') === document.activeElement) return;  // mid-edit
+    refreshCells([{ room: gone.room_id, field: gone.field_id }]);
+    if (td) flash(td, 'remote');
+    return;
+  }
   const row = payload.new;
   if (!row || !row.room_id) return;
   const prev = state.values.get(key(row.room_id, row.field_id));
