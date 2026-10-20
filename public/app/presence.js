@@ -53,13 +53,22 @@ function initials(email) {
 // ---------- the channel ----------
 
 let channel = null, mine = null, sendTimer = null, pending = false, beat = null, failed = false;
+let want = null, retry = 0, retryTimer = null;
 
 export function startPresence(projectId) {
-  stopPresence();
+  want = projectId;        // what we are trying to be joined to, come what may
+  open();
+}
+
+// Build the channel and join it. Called again whenever we find ourselves not
+// joined, which is the whole trick: a channel that has gone cannot be revived,
+// only replaced.
+function open() {
+  teardown();
   const email = myEmail();
-  if (!email) return;
+  if (!email || !want) return;
   mine = { email, subject: state.subject, sel: null };
-  channel = sb.channel('presence-' + projectId, { config: { presence: { key: email } } });
+  channel = sb.channel('presence-' + want, { config: { presence: { key: email } } });
   channel
     .on('presence', { event: 'sync' }, () => {
       const seen = channel.presenceState();
@@ -73,22 +82,44 @@ export function startPresence(projectId) {
       paintPeerStrip();
       paintPeers();
     })
-    // This fires again on every rejoin, not just the first time. A dropped
-    // socket makes the server forget we were ever here, so re-announcing on
-    // each join is what stops someone going quietly invisible to everyone else
-    // while their own page still reads as connected.
-    .subscribe(status => { if (status === 'SUBSCRIBED') announce(); });
+    .subscribe(status => {
+      // SUBSCRIBED fires on every join, not just the first. A dropped socket
+      // makes the server forget we were ever here, so re-announcing on each
+      // join is what stops someone going quietly invisible to everyone else
+      // while their own page still reads as connected.
+      if (status === 'SUBSCRIBED') { retry = 0; announce(); return; }
+      // The other three matter just as much, and ignoring them was a bug that
+      // looked exactly like the first one: supabase-js takes a channel off the
+      // socket when it closes, errors or times out, so there is then nothing
+      // left to recover. Presence simply ends, mid-session, with the socket
+      // still open and the page still looking fine. It has to be rebuilt.
+      if (status === 'CLOSED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') reopen();
+    });
 
-  // Laptops suspend, wifi drops, and a rejoin we somehow don't hear about would
-  // leave us absent from everyone's screen with no way to notice. One message
-  // every half minute buys presence that heals itself.
-  beat = setInterval(announce, 30000);
+  beat = setInterval(heartbeat, 15000);
   addEventListener('visibilitychange', onShow);
+}
+
+// Backing off matters because the usual reason a join fails is that the network
+// is already unhappy; retrying hard would make it worse and drain a laptop.
+function reopen() {
+  if (!want || retryTimer) return;
+  const wait = Math.min(30000, 2000 * 2 ** retry++);
+  retryTimer = setTimeout(() => { retryTimer = null; open(); }, wait);
+}
+
+// Twice a minute: are we still actually on the socket, and does everyone still
+// know where we are? The status callback is not reliably told about every way a
+// channel can disappear, so this checks for itself rather than trusting it.
+function heartbeat() {
+  if (!want) return;
+  if (!channel || !sb.getChannels().includes(channel)) return reopen();
+  announce();
 }
 
 // Coming back to the tab is the commonest moment to have been dropped while
 // away, and the one where being missing is most obvious to everyone else.
-function onShow() { if (document.visibilityState === 'visible') announce(); }
+function onShow() { if (document.visibilityState === 'visible') heartbeat(); }
 
 // Say where I am right now, ignoring the throttle -- for when the connection
 // may have forgotten us, as opposed to when the selection merely moved.
@@ -99,7 +130,9 @@ function announce() {
   track();
 }
 
-export function stopPresence() {
+// Drop the channel and every timer hanging off it, without forgetting which
+// project we are meant to be in -- that is what lets open() be called again.
+function teardown() {
   if (channel) sb.removeChannel(channel);
   channel = null;
   mine = null;
@@ -109,6 +142,15 @@ export function stopPresence() {
   removeEventListener('visibilitychange', onShow);
   sendTimer = beat = null;
   pending = failed = false;
+}
+
+// Leaving the project for good: stop wanting to be here, so nothing rebuilds.
+export function stopPresence() {
+  want = null;
+  retry = 0;
+  clearTimeout(retryTimer);
+  retryTimer = null;
+  teardown();
 }
 
 // Dragging across a block of cells fires on every cell it crosses, so what goes

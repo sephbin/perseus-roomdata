@@ -6,6 +6,6 @@
 // left open keeps the modules it loaded, so "I pushed the fix" and "they are
 // running the fix" are different claims, and the About panel is how you tell
 // them apart without guessing.
-export const BUILD = 5;
+export const BUILD = 6;
 export const BUILT = '2026-10-20';
-export const VERSION = '0.1.5';
+export const VERSION = '0.1.6';
