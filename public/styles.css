@@ -147,7 +147,8 @@ body.warm {
 .bar h1 { font-size: 22px; font-weight: 700; margin: 0; }
 .bar .crumb { color: var(--muted); text-decoration: none; }
 .bar .crumb:hover { color: var(--accent); }
-.bar .who { margin-left: auto; color: var(--muted); font-size: 13px; }
+.bar .who { color: var(--muted); font-size: 13px; }
+.bar .peerslot { margin-left: auto; }
 .toolbar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 10px 18px; border-bottom: 1px solid var(--line);
@@ -370,3 +371,93 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .pager .pos { font-size: 13px; font-weight: 600; min-width: 74px; text-align: center; }
 .pager button { min-width: 34px; font-size: 16px; line-height: 1; }
 .pager .who { color: var(--muted); font-size: 13px; margin-left: 6px; }
+/* The project name is editable in place for admins, and should read as the
+   heading it replaces rather than as a form field. */
+.bar .projname {
+  font: inherit; font-size: 20px; font-weight: 700; color: var(--ink);
+  background: none; border: 1px solid transparent; border-radius: 6px;
+  padding: 2px 8px; min-width: 12ch; width: 26ch; max-width: 40vw;
+}
+.bar .projname:hover { border-color: var(--line); }
+.bar .projname:focus { border-color: var(--accent); background: var(--sheet); outline: none; }
+
+/* ---------- Who else is here ----------
+   A circle per person, coloured from their address so the same person is the
+   same colour on everybody's screen without anyone having to agree on it.
+   Presence is never authoritative -- it is drawn on top of the sheet and
+   touches nothing underneath. */
+.peers { display: inline-flex; align-items: center; gap: 0; }
+.peer {
+  width: 26px; height: 26px; border-radius: 50%;
+  display: inline-grid; place-items: center;
+  font-size: 10px; font-weight: 700; letter-spacing: .02em;
+  color: #fff; background: var(--pc, var(--muted));
+  border: 2px solid var(--paper);
+  margin-left: -6px;                     /* overlap, like a stack of faces */
+  cursor: default; user-select: none;
+}
+.peer:first-child { margin-left: 0; }
+.peer.more { background: var(--muted); }
+
+/* Someone else's selection. An outline rather than a fill, so it can sit on
+   top of a cell that is already tinted for an override or my own range
+   without either of them being lost. */
+.grid td.peer-cell { box-shadow: inset 0 0 0 2px var(--pc); border-radius: 2px; }
+
+/* ---------- Settings menu ---------- */
+.menu { position: relative; }
+.bar .icon {
+  background: none; border: 1px solid transparent; border-radius: 6px;
+  color: var(--muted); font-size: 16px; line-height: 1; padding: 5px 8px; cursor: pointer;
+}
+.bar .icon:hover { border-color: var(--line); color: var(--ink); }
+.menu .pop {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 60;
+  background: var(--sheet); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 4px; min-width: 210px;
+  display: flex; flex-direction: column;
+}
+.menu .pop[hidden] { display: none; }
+.menu .pop button {
+  background: none; border: 0; text-align: left; width: 100%;
+  padding: 8px 10px; border-radius: 6px; color: var(--ink); font: inherit; cursor: pointer;
+}
+.menu .pop button:hover { background: var(--ro); }
+
+/* ---------- The tour ----------
+   A dim layer, a hole cut over the thing being described, and a note with an
+   arrow. The hole is a transparent box with an enormous spread shadow rather
+   than a real cut-out, which keeps it to one element and one paint. */
+.tour { position: fixed; inset: 0; z-index: 200; }
+.tour-dim { position: absolute; inset: 0; background: rgba(12, 18, 24, .55); }
+.tour-hole {
+  position: absolute; border-radius: 6px; pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(12, 18, 24, .55), 0 0 0 2px var(--accent);
+  background: transparent;
+}
+.tour-hole[hidden] { display: none; }
+.tour-note {
+  position: absolute; background: var(--sheet); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px;
+  box-shadow: 0 12px 36px rgba(0,0,0,.28); max-width: 360px;
+}
+.tour-note.centre { left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, calc(100vw - 32px)); }
+.tour-note h2 { margin: 0 0 8px; font-size: 17px; font-weight: 700; }
+.tour-note p { margin: 0 0 14px; font-size: 14px; line-height: 1.5; color: var(--ink); }
+.tour-note footer { display: flex; align-items: center; gap: 8px; }
+.tour-note .grow { flex: 1; }
+.tour-dots { display: inline-flex; gap: 4px; }
+.tour-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--line-strong); }
+.tour-dots i.on { background: var(--accent); }
+
+/* The arrow is the note's own corner, turned 45 degrees and pushed through the
+   edge, so it inherits the border and the background and can't drift out of
+   step with them. --ax/--ay line it up with the middle of the target. */
+.tour-note[data-arrow]::after {
+  content: ''; position: absolute; width: 12px; height: 12px;
+  background: var(--sheet); border: 1px solid var(--line); transform: rotate(45deg);
+}
+.tour-note[data-arrow="below"]::after { top: -7px; left: var(--ax); margin-left: -6px; border-right: 0; border-bottom: 0; }
+.tour-note[data-arrow="above"]::after { bottom: -7px; left: var(--ax); margin-left: -6px; border-left: 0; border-top: 0; }
+.tour-note[data-arrow="right"]::after { left: -7px; top: var(--ay); margin-top: -6px; border-right: 0; border-top: 0; }
+.tour-note[data-arrow="left"]::after  { right: -7px; top: var(--ay); margin-top: -6px; border-left: 0; border-bottom: 0; }

@@ -1,7 +1,7 @@
 // The project shell: the bar, the toolbar, the drawer slot, and the wiring for
 // everything that isn't inside the grid itself.
 import { sb } from './client.js';
-import { app, state, isAdmin, myEmail, dColor, typeName, roomLabel, typeTree, saveUI, applyUI } from './state.js';
+import { app, state, isAdmin, myEmail, dColor, typeName, roomLabel, typeTree, saveUI, applyUI, discLabel } from './state.js';
 import { esc, toast, friendly } from './util.js';
 import {
   gridHTML, applyWidths, paintGrid, paintSearch, paintSelection, wireGridDrag,
@@ -10,6 +10,8 @@ import { saveValue, fillDown, exportCSV } from './actions.js';
 import { renderDrawer } from './drawers.js';
 import { loadProject } from './data.js';
 import { sheetHTML, sheetRooms, sheetRoom, sheetIndex, stepSheet, exportDocx, roomTitle } from './sheetview.js';
+import { peersHTML, paintPeers } from './presence.js';
+import { startTour, maybeStartTour } from './tour.js';
 
 // One sheet per room, in the order the Instance tab has them, narrowed to the
 // selection when there is one. A whole project at once would be hundreds of
@@ -53,6 +55,14 @@ export function fitSheet() {
   if (pno) pno.textContent = overflows ? '1' : '';
 }
 
+const shutMenu = () => {
+  const pop = document.getElementById('settings-pop'), btn = document.getElementById('settings-btn');
+  if (pop) pop.hidden = true;
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+};
+addEventListener('click', shutMenu);
+addEventListener('keydown', e => e.key === 'Escape' && shutMenu());
+
 export function renderProject(keepUI) {
   const wrap = document.getElementById('grid-wrap');
   const scroll = keepUI && wrap ? [wrap.scrollLeft, wrap.scrollTop] : [0, 0];
@@ -65,15 +75,25 @@ export function renderProject(keepUI) {
   state.disc.filter(d => state.fields.some(f => f.discipline === d)).forEach(d => tabs.push([d, d, dColor(d)]));
 
   const roleText = state.me
-    ? (state.me.role === 'consultant' ? `${state.me.disciplines.join(', ') || 'No disciplines yet'}` : state.me.role === 'admin' ? 'Admin' : 'View only')
+    ? (state.me.role === 'consultant' ? esc(discLabel(state.me)) : state.me.role === 'admin' ? 'Admin' : 'View only')
     : '';
 
   app.innerHTML = `
   <div class="shell">
     <header class="bar">
       <a class="crumb" href="#">Projects</a>
-      <h1>${esc(state.project.name)}</h1>
-      <span class="who">${esc(myEmail())}, ${esc(roleText)} <button class="link" id="signout">Sign out</button></span>
+      ${isAdmin()
+        ? `<input id="projname" class="projname" value="${esc(state.project.name)}" aria-label="Project name" spellcheck="false">`
+        : `<h1>${esc(state.project.name)}</h1>`}
+      <span class="peerslot" id="peerslot">${peersHTML()}</span>
+      <span class="who">${esc(myEmail())}, ${esc(roleText)}</span>
+      <div class="menu">
+        <button id="settings-btn" class="icon" aria-haspopup="true" aria-expanded="false" aria-label="Settings" title="Settings">\u2699</button>
+        <div class="pop" id="settings-pop" hidden>
+          <button id="tour-again">Show me how this works</button>
+          <button id="signout">Sign out</button>
+        </div>
+      </div>
     </header>
     <div class="toolbar">
       <nav class="tabs subj">
@@ -132,6 +152,40 @@ export function renderProject(keepUI) {
 
 export function wireProject() {
   document.getElementById('signout').onclick = () => sb.auth.signOut();
+
+  // A popover rather than a row of buttons, because the header is the one
+  // place everything competes for room and sign-out is not a thing to put
+  // next to a project name you can rename by clicking it.
+  const sbtn = document.getElementById('settings-btn'), spop = document.getElementById('settings-pop');
+  if (sbtn && spop) {
+    const shut = shutMenu;
+    sbtn.onclick = e => {
+      e.stopPropagation();
+      spop.hidden = !spop.hidden;
+      sbtn.setAttribute('aria-expanded', String(!spop.hidden));
+    };
+    spop.onclick = e => e.stopPropagation();
+    document.getElementById('tour-again').onclick = () => { shut(); startTour(); };
+  }
+
+  // The sheet was just rebuilt, so anyone else's cells need drawing again.
+  paintPeers();
+  maybeStartTour();
+
+  const pn = document.getElementById('projname');
+  if (pn) pn.onchange = async () => {
+    const name = pn.value.trim(), was = state.project.name;
+    if (!name) { pn.value = was; return toast('A project needs a name', true); }
+    if (name === was) return;
+    state.project.name = name;                  // show it at once, like a cell
+    const { error } = await sb.from('projects').update({ name }).eq('id', state.projectId);
+    if (error) {
+      state.project.name = was;
+      pn.value = was;
+      return toast(friendly(error), true);
+    }
+    toast('Project renamed');
+  };
   document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => {
     state.view = b.dataset.view;
     document.querySelectorAll('[data-view]').forEach(x => x.setAttribute('aria-pressed', x === b));

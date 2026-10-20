@@ -6,6 +6,7 @@ import { onRender } from './bus.js';
 import { loadProject, loadProjects } from './data.js';
 import { renderLogin } from './auth.js';
 import { renderProject } from './view.js';
+import { stopPresence } from './presence.js';
 
 function route() {
   if (!state.session) { leaveProject(); return renderLogin(); }
@@ -20,6 +21,7 @@ function route() {
 
 function leaveProject() {
   if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
+  stopPresence();
   state.projectId = null;
   state.drawer = null;
 }

@@ -3,7 +3,7 @@
 import { sb } from './client.js';
 import {
   state, isAdmin, canEdit, myEmail, dColor, frozenFields, sheetFields, matchDisc, roomByRef,
-  keyField,
+  keyField, discLabel, hasAllDisc, ALL_DISC,
 } from './state.js';
 import { key, esc, byNatural, toast, friendly, typeNames, valueFits, splitDelimited, normHeader } from './util.js';
 import { loadProject } from './data.js';
@@ -91,6 +91,7 @@ export function renderDrawer(kind) {
 
   if (kind === 'people') {
     html = `
+      ${discList}
       <h3>Add someone</h3>
       <form id="f-member">
         <input name="email" type="email" placeholder="Their email" required>
@@ -99,18 +100,36 @@ export function renderDrawer(kind) {
           <option value="viewer">Viewer: sees everything, edits nothing</option>
           <option value="admin">Admin: manages rooms, columns and people</option>
         </select>
-        <input name="disciplines" placeholder="Disciplines, separated by commas">
+        <input name="disciplines" placeholder="Disciplines, separated by commas" list="disc-list">
+        <label class="check"><input type="checkbox" name="all_disc"> Every discipline</label>
+        <p class="hint">Every discipline lets a consultant edit the whole sheet without the right to manage rooms, columns and people — for a project architect, say. It covers columns added later, too.</p>
         <label class="check"><input type="checkbox" name="edits_parent_types"> Can edit shared room types</label>
         <p class="hint">A room type with others beneath it sets values for all of them, so editing one needs this. Admins always can.</p>
-        <p class="hint">${state.disc.length ? 'Existing disciplines: ' + esc(state.disc.join(', ')) + '. ' : ''}After adding them, send them the link to this page. They sign in with that email and the project appears.</p>
+        <p class="hint">${state.disc.length ? 'Existing disciplines: ' + esc(state.disc.join(', ')) + '. ' : ''}Adding someone here doesn’t create a sign-in or send them anything — it puts their address on this project. Send them the link yourself.</p>
         <button class="primary">Add person</button>
       </form>
       <h3>People on this project</h3>
-      <ul class="list">${state.members.slice().sort((a, b) => byNatural(a.email, b.email)).map(m => `
-        <li><span class="grow">${esc(m.email)}<small>${m.role === 'consultant' ? 'Consultant: ' + esc(m.disciplines.join(', ') || 'no disciplines') : m.role === 'admin' ? 'Admin' : 'Viewer'}${
+      <ul class="list">${state.members.slice().sort((a, b) => byNatural(a.email, b.email)).map(m => state.editMember === m.email ? `
+        <li class="editing"><form class="f-edit-member" data-email="${esc(m.email)}">
+          <span class="grow">${esc(m.email)}</span>
+          <select name="role" aria-label="Role">
+            <option value="consultant" ${m.role === 'consultant' ? 'selected' : ''}>Consultant: edits their discipline’s columns</option>
+            <option value="viewer" ${m.role === 'viewer' ? 'selected' : ''}>Viewer: sees everything, edits nothing</option>
+            <option value="admin" ${m.role === 'admin' ? 'selected' : ''}>Admin: manages rooms, columns and people</option>
+          </select>
+          <input name="disciplines" value="${esc(hasAllDisc(m) ? '' : m.disciplines.join(', '))}" list="disc-list" placeholder="Disciplines, separated by commas" aria-label="Disciplines">
+          <label class="check"><input type="checkbox" name="all_disc" ${hasAllDisc(m) ? 'checked' : ''}> Every discipline</label>
+          <label class="check"><input type="checkbox" name="edits_parent_types" ${m.edits_parent_types ? 'checked' : ''}> Can edit shared room types</label>
+          <div class="row"><button class="primary">Save</button><button type="button" data-cancel-member>Cancel</button></div>
+          <button type="button" class="danger" data-del-member="${esc(m.email)}">Remove from this project</button>
+        </form></li>` : `
+        <li><span class="grow">${esc(m.email)}<small>${m.role === 'consultant' ? 'Consultant: ' + esc(discLabel(m)) : m.role === 'admin' ? 'Admin' : 'Viewer'}${
           m.role === 'consultant' && m.edits_parent_types ? ' · edits shared types' : ''}</small></span>
-        ${m.email === myEmail() ? '<span class="muted">You</span>' : `<button class="danger" data-del-member="${esc(m.email)}">Remove</button>`}</li>`).join('')}
-      </ul>`;
+        ${m.email === myEmail()
+          ? '<span class="muted">You</span>'
+          : `<button data-edit-member="${esc(m.email)}">Edit</button>`}</li>`).join('')}
+      </ul>
+      <p class="hint">You can’t change or remove your own row — that’s what stops a project losing its last admin. Another admin can.</p>`;
   }
 
   const titles = { rooms: 'Rooms', columns: 'Columns', people: 'People' };
@@ -271,22 +290,46 @@ export function wireDrawer() {
     after('Column added');
   });
 
+  // Role, disciplines and the two rights, read the same way whether the person
+  // is being added or edited. Only a consultant carries disciplines: an admin
+  // edits everything anyway and a viewer edits nothing, so leaving stale ones
+  // on the row would mean a demotion silently kept its old reach.
+  const memberRights = form => {
+    const fd = new FormData(form);
+    const role = fd.get('role');
+    const all = fd.get('all_disc') === 'on';
+    const typed = [...new Set(fd.get('disciplines').split(',').map(x => x.trim()).filter(Boolean).map(matchDisc))];
+    const disciplines = role !== 'consultant' ? [] : all ? [ALL_DISC] : typed.filter(d => d !== ALL_DISC);
+    if (role === 'consultant' && !disciplines.length) {
+      toast('Give a consultant at least one discipline, or tick Every discipline', true);
+      return null;
+    }
+    return {
+      role, disciplines,
+      edits_parent_types: role === 'consultant' && fd.get('edits_parent_types') === 'on',
+    };
+  };
+
   document.getElementById('f-member')?.addEventListener('submit', async e => {
     e.preventDefault();
-    const fd = new FormData(e.target);
-    const role = fd.get('role');
-    const disciplines = role === 'consultant'
-      ? [...new Set(fd.get('disciplines').split(',').map(s => s.trim()).filter(Boolean).map(matchDisc))]
-      : [];
-    if (role === 'consultant' && !disciplines.length) return toast('Give a consultant at least one discipline', true);
+    const rights = memberRights(e.target);
+    if (!rights) return;
+    const email = new FormData(e.target).get('email').trim().toLowerCase();
     const { error } = await sb.from('project_members').upsert(
-      {
-        project_id: pid, email: fd.get('email').trim().toLowerCase(), role, disciplines,
-        edits_parent_types: role === 'consultant' && fd.get('edits_parent_types') === 'on',
-      },
-      { onConflict: 'project_id,email' });
+      { project_id: pid, email, ...rights }, { onConflict: 'project_id,email' });
     if (error) return toast(friendly(error), true);
     after('Person added');
+  });
+
+  document.querySelector('.f-edit-member')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    const rights = memberRights(e.target);
+    if (!rights) return;
+    const { error } = await sb.from('project_members').update(rights)
+      .eq('project_id', pid).eq('email', e.target.dataset.email);
+    if (error) return toast(friendly(error), true);
+    state.editMember = null;
+    after('Person updated');
   });
 
   // Renumber a whole band, or the bands themselves, so a move never leaves ties behind.
@@ -318,6 +361,8 @@ export function wireDrawer() {
     const d = e.target.dataset;
     if (d.editField) { state.editField = d.editField; return renderDrawer('columns'); }
     if ('cancelEdit' in d) { state.editField = null; return renderDrawer('columns'); }
+    if (d.editMember) { state.editMember = d.editMember; return renderDrawer('people'); }
+    if ('cancelMember' in d) { state.editMember = null; return renderDrawer('people'); }
     if (d.hideField) {
       const f = state.fields.find(x => x.id === d.hideField);
       const { error } = await sb.from('fields').update({ hidden: !f.hidden }).eq('id', f.id);
@@ -353,6 +398,7 @@ export function wireDrawer() {
       if (!confirm(`Remove ${mem} from this project?`)) return;
       const { error } = await sb.from('project_members').delete().eq('project_id', pid).eq('email', mem);
       if (error) return toast(friendly(error), true);
+      state.editMember = null;
       after('Person removed');
     }
   };

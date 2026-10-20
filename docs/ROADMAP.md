@@ -5,7 +5,7 @@ Ordered roughly by priority. Each item is sized to be a single focused task.
 ## Before inviting real consultants
 
 1. ~~**Move config out of index.html.**~~ Done: `public/app/config.js` holds the URL and publishable key and nothing else.
-2. **Restrict project creation.** Add an allowlist (table of emails or an allowed email domain such as `@cox.com.au`) checked inside `create_project()`.
+2. ~~**Restrict project creation.**~~ Done: `project_creators` is an allowlist of emails, checked by `can_create_project()` inside `create_project()`. Existing admins were seeded into it. Adding someone is still a SQL insert — a People-drawer control for it is item 20.
 3. **Set up the Supabase CLI.** Link the repo to the project so migrations are applied with `supabase db push` instead of pasting SQL.
 4. **Deploy.** Static hosting (Netlify, Cloudflare Pages or GitHub Pages). Add the deployed URL to Supabase Auth → URL Configuration.
 5. **Custom SMTP.** Document the chosen provider and the template changes (`{{ .Token }}` in Magic Link and Confirm Signup).

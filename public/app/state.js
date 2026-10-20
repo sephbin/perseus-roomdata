@@ -11,12 +11,25 @@ export const state = {
   members: [], rooms: [], fields: [], values: new Map(),
   types: [], typeValues: new Map(), subject: 'rooms',
   sort: null, filters: new Map(), widths: {}, sheetAt: 0,
-  disc: [], view: 'all', search: '', drawer: null, editField: null, selected: new Set(), cellA: null, cellB: null, channel: null,
+  disc: [], view: 'all', search: '', drawer: null, editField: null, editMember: null, selected: new Set(), cellA: null, cellB: null, channel: null,
+  // Who else has this project open. Lives only as long as the tab does -- it
+  // comes from the Realtime channel, never from the database.
+  peers: new Map(),
 };
 
 export const myEmail = () => (state.session?.user?.email || '').toLowerCase();
 export const isAdmin = () => state.me?.role === 'admin';
-export const canEdit = f => isAdmin() || (state.me?.role === 'consultant' && (state.me.disciplines || []).includes(f.discipline));
+export const ALL_DISC = '*';
+export const hasAllDisc = m => (m?.disciplines || []).includes(ALL_DISC);
+// Mirrors can_edit_value() in SQL. The database is the authority; this only
+// decides what to grey out, so the two must say the same thing.
+export const canEdit = f => isAdmin()
+  || (state.me?.role === 'consultant'
+      && (hasAllDisc(state.me) || (state.me.disciplines || []).includes(f.discipline)));
+// How a member's disciplines read in the UI, where "*" is a word, not a name.
+export const discLabel = m => hasAllDisc(m)
+  ? 'All disciplines'
+  : (m?.disciplines || []).join(', ') || 'no disciplines';
 export const currentProjectId = () => (location.hash.match(/^#p=([0-9a-f-]{36})$/) || [])[1] || null;
 
 export const dColor = d => PALETTE[Math.max(0, state.disc.indexOf(d)) % PALETTE.length];
@@ -306,6 +319,7 @@ export function gridColumns() {
 }
 
 export const matchDisc = name => {
+  if (name.trim() === ALL_DISC) return ALL_DISC;
   const n = name.trim();
   return state.disc.find(d => d.toLowerCase() === n.toLowerCase()) || n;
 };

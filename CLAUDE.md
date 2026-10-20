@@ -40,24 +40,31 @@ public/
     state.js        the one mutable `state` object + every read-only question
                     you can ask about it. No network, no DOM writes.
     client.js       the Supabase client; auth and hash changes call the router
-    bus.js          lets data.js ask for a redraw without importing the view
+    bus.js          lets one module tell another something happened without
+                    importing it: the redraw, plus 'selection' and 'painted'
     auth.js         the sign-in screen
     data.js         reads: loading a project, realtime, the project list
     grid.js         drawing the sheet + everything inside it (cells, freeze
                     zone, row selection, cell ranges). Owns its drag state.
     actions.js      writes: saving a cell, fill down, paste, export
     drawers.js      the admin drawers: rooms, columns, people
+    presence.js     who else has this project open, and where they are in it
+    tour.js         the guided tour: the steps, the spotlight, the arrow
     view.js         the project shell and the wiring outside the grid
     main.js         entry point: routing, and connecting the above
 ```
 
 **The dependency rule: imports point one way only.** `config` and `util` import
-nothing. `state` imports only `util`. Everything else may import those three,
-plus: `grid` → nothing further; `data` → `grid` + `bus`; `actions` and
-`drawers` → `grid` + `data`; `view` → all of them; `main` → everything. Nothing
-imports `view` or `main`. That is why `bus.js` exists — `data.js` must trigger a
+nothing. `state` imports only `util`. `bus` imports nothing either, so anything
+may import it. Everything else may import those four, plus: `grid` → `bus` and
+no further; `presence` and `tour` → `client`/`state`/`util`/`bus`; `data` →
+`grid` + `bus` + `presence`; `actions` and `drawers` → `grid` + `data`; `view`
+→ all of them; `main` → everything. Nothing imports `view` or `main`. That is why `bus.js` exists — `data.js` must trigger a
 redraw, and importing `view.js` to do it would make the two import each other,
-which is where module cycles and half-initialised imports come from.
+which is where module cycles and half-initialised imports come from. It carries
+two more topics for the same reason: `grid` announces `'selection'` and
+`'painted'` without knowing that `presence` is listening, which keeps the sheet
+ignorant of anything drawn on top of it.
 
 **Deciding where something new belongs:** does it only transform its arguments
 (`util`), answer a question about current state (`state`), read from Supabase
@@ -71,7 +78,8 @@ the running app uses, so state can be stubbed and functions called directly.
 
 ## Data model
 
-- `projects`: created only via `create_project(p_name)` RPC (security definer), which also makes the caller admin.
+- `projects`: created only via `create_project(p_name)` RPC (security definer), which also makes the caller admin. It raises unless `can_create_project()` says yes, so the gate holds for anyone calling the API directly. Admins rename a project with a plain update on `projects`, which its RLS policy limits to admins of that project.
+- `project_creators (email)`: the allowlist of people who may start a project. `can_create_project()` returns true for an address in it **or** already an admin of some project, so an existing project's admin can't be locked out. A person can only select their own row.
 - `project_members (project_id, email, role, disciplines text[])`: keyed by **lowercased email**, not user id, so people can be added before they've ever signed in. Roles: `admin`, `consultant`, `viewer`.
 - `room_types (project_id, name unique per project, sort_order, parent_id)` and `type_values (type_id, field_id) PK, value`: a type carries a default for any column, and **types nest**. `rooms.type_id` is nullable, so a room without a type behaves exactly as it did before types existed.
 - `project_members.edits_parent_types`: lets a consultant edit a type that has children. Admins always can.
@@ -86,6 +94,8 @@ the running app uses, so state can be stubbed and functions called directly.
 - `room_values_before` trigger: sets `project_id` from the room, overwrites `updated_by`/`updated_at` (can't be spoofed), converts `''` to null, validates value against the field type/options.
 - `room_values_after` trigger: writes `value_history`.
 - Consultants can edit a cell iff `field.discipline = any(member.disciplines)`. Admins can edit everything. Viewers read only.
+- **`*` in a consultant's disciplines means every column**, including ones added later. It is the only wildcard — everything else matches exactly, because disciplines are free text and pattern matching would surprise people. It widens which *columns*, never which *types*: a type with children still needs `edits_parent_types`. `can_edit_value()`, `can_edit_type_value()` and `canEdit()` in `state.js` all have to say the same thing, so change them together. `state.disc` excludes it, or it would show as a discipline tab matching no columns.
+- Membership is a row in `project_members`, not an account. Adding someone creates no sign-in and sends no email — the account lives in Supabase Auth and is made by hand in the dashboard. The People drawer edits role, disciplines and `edits_parent_types` in place; the role is the source of truth, so demoting someone clears the disciplines rather than leaving a lapsed reach on the row.
 - Admins can't delete or demote their own membership row (prevents orphaned projects).
 - Front end writes cells with `upsert(..., { onConflict: 'room_id,field_id' })`, which needs INSERT, UPDATE and SELECT policies.
 - Reads paginate with `fetchAll()` because PostgREST caps responses at 1000 rows by default; a 300-room × 40-column project is 12k cells.
@@ -124,6 +134,10 @@ the running app uses, so state can be stubbed and functions called directly.
 - **Paste (Rooms drawer) is header-driven**, not positional. The first pasted row names the columns; `normHeader()` matches them to field labels ignoring case, spaces and punctuation, so a Revit export lines up without being rearranged. Headings that match nothing are skipped and named in the result. Tab or comma delimited, decided by the header line; `splitDelimited()` respects quotes, because a Revit schedule cheerfully contains commas inside names.
 - **Which column identifies a room**: a `Room id` heading matches on `rooms.id` as the CSV export writes it, otherwise the column marked `fields.is_key` — the **import key**, one per project by partial unique index. It holds whatever the source system calls an id, typically a Revit element id. The room's own primary key is still `rooms.id`; `is_key` is an *external* key, which is what makes re-importing a schedule update rather than duplicate.
 - A row whose key value is already present updates that room; anything else is added. Cells that don't suit their column are skipped and counted rather than failing the whole paste.
+- **Presence has no database behind it.** Who is here lives in a second Realtime channel, `presence-<projectId>`, keyed by email, and vanishes with the tab — which is what "who is here" means. Where someone is selected rides along in the presence payload rather than on a separate broadcast, so a late arrival sees everyone's current selection at once instead of waiting for each of them to move. Nothing in it is authoritative and nothing is saved; the worst a wrong value can do is draw a circle in the wrong place.
+- Outgoing presence is throttled to the trailing edge of a 250 ms window, because a drag fires on every cell it crosses: a 20-cell drag sends 5 updates, not 20, and the last one is always the truth. Selections travel as **ids, not positions** — the person reading has their own sort and filters, so a row number would point somewhere else on their screen. A peer whose cell is filtered out of my view simply isn't drawn, and nor is one on the other sheet.
+- A peer's colour comes from a hash of their address, so everyone sees the same person in the same colour without anyone having to agree on it. Their cells get an outline rather than a fill, so it can sit on top of an override tint or my own range without either being lost.
+- **The tour is data, not code.** `STEPS` in `tour.js` names things already on screen by selector; a step whose target is missing (an admin button for a consultant) or whose `when()` is false is skipped rather than being a bug. It renders nothing to point at and changes nothing, and it auto-starts once per page load — `renderProject` runs on every realtime change, and a tour that restarted itself at step one each time would be unescapable.
 - Routing is hash-based: `#p=<project uuid>`. Supabase auth tokens also arrive in the hash after a magic link; `currentProjectId()` only matches the `#p=` form.
 - Never `await` Supabase calls inside `onAuthStateChange`; the code defers with `setTimeout`.
 
@@ -132,7 +146,7 @@ the running app uses, so state can be stubbed and functions called directly.
 - **Email:** Supabase's default SMTP only delivers to members of the Supabase org team and is limited to roughly 2 emails/hour. Custom SMTP (Resend, Brevo, etc.) is required before inviting real consultants. Until then, use password sign-in, which sends no email at all.
 - Email templates (Magic Link and Confirm Signup) must include `{{ .Token }}` for the code-entry path to work. Corporate mail scanners sometimes consume magic links, so the code path matters.
 - Free tier projects pause after a week of inactivity.
-- Anyone who signs in can create a project. Fine for a trial; should be restricted (e.g. allowlist or email domain) before wider use.
+- Adding someone to a project doesn't give them a way in. Their Supabase Auth account has to exist — made by hand in the dashboard, since self-signup is off — and the password is whatever was set there. There's no "invite" and no password reset flow in the app yet.
 - Realtime DELETE events on `rooms`/`fields` aren't filtered by `project_id`, so other users may not see deletions until their next reload.
 - Room deletes cascade to all values. There's a confirm dialog, but no soft delete or undo.
 - Adding a member doesn't email them; the admin shares the link manually.

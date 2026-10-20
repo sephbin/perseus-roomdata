@@ -5,9 +5,10 @@ import {
   state, isAdmin, canEdit, dColor, sheet, visibleFields, visibleRows,
   frozenFields, gridColumns, shortId, typeName, parentChoices,
   orderedRows, visibleIds, sortDir, isFiltered, cycleSort, columnValues, keyField, rowById,
-  saveUI,
+  saveUI, discLabel,
 } from './state.js';
 import { key, esc, displayValue, stamp } from './util.js';
+import { emit } from './bus.js';
 
 // The first column shows whatever identifies a room to the people using it:
 // the import key if one is set -- a Revit UniqueId, say -- and the first 8
@@ -39,7 +40,7 @@ export function gridHTML() {
           : 'The project admin hasn’t added any rooms yet.'}</p></div>`;
   }
   if (!fs.length && state.view === 'mine') {
-    return `<div class="empty"><h2>No columns for you yet</h2><p class="muted">The project admin hasn’t added columns for ${esc((state.me?.disciplines || []).join(', '))}. Switch to All columns to see the rest of the sheet.</p></div>`;
+    return `<div class="empty"><h2>No columns for you yet</h2><p class="muted">The project admin hasn’t added columns for ${esc(discLabel(state.me))}. Switch to All columns to see the rest of the sheet.</p></div>`;
   }
 
   // group header cells for consecutive fields of one discipline
@@ -169,6 +170,7 @@ export function paintGrid() {
   document.getElementById('grid-wrap').innerHTML = gridHTML();
   applyWidths();                       // also runs layoutFrozen
   paintSearch();
+  emit('painted');                     // overlays lost their cells; redraw them
 }
 
 // Searching is a filter, not a different sheet, so it toggles one class per row
@@ -250,7 +252,7 @@ export function paintRange() {
   rangePainted = [];
   rangeRowsPainted = [];
   const cells = rangeCells();
-  if (!cells.length) return;
+  if (!cells.length) return emit('selection');        // cleared counts as news
   const cols = gridColumns().map(f => f.id);
   const rows = new Map([...document.querySelectorAll('.grid tbody tr')].map(tr => [tr.dataset.room, tr]));
   for (const row of cells) {
@@ -266,6 +268,7 @@ export function paintRange() {
       rangePainted.push(td);
     }
   }
+  emit('selection');
 }
 export const clearRange = () => { state.cellA = state.cellB = null; paintRange(); };
 

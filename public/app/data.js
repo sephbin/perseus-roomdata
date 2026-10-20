@@ -2,14 +2,17 @@
 // the realtime subscription, and the project list. Asks for a redraw through
 // the bus rather than importing the view.
 import { sb } from './client.js';
-import { app, state, myEmail, isAdmin, applyUI } from './state.js';
+import { app, state, myEmail, isAdmin, applyUI, ALL_DISC } from './state.js';
 import { key, esc, byNatural, toast, friendly, fetchAll, displayValue, stamp } from './util.js';
 import { flash, refreshColumn } from './grid.js';
 import { rerender } from './bus.js';
+import { startPresence } from './presence.js';
 
 export async function loadProjects() {
   const { data, error } = await sb.from('projects').select('id,name,created_at').order('created_at', { ascending: false });
   if (error) return toast(friendly(error), true);
+  // The database decides this, not the page; hiding the form is only courtesy.
+  const { data: mayCreate } = await sb.rpc('can_create_project');
   app.innerHTML = `
   <main class="narrow">
     <h1>Projects</h1>
@@ -17,14 +20,14 @@ export async function loadProjects() {
     ${data.length
       ? `<ul class="plist">${data.map(p => `<li><a href="#p=${p.id}">${esc(p.name)}</a></li>`).join('')}</ul>`
       : `<p>You’re not on any projects yet. If you’re a consultant, ask the project architect to add your email, then refresh this page.</p>`}
-    <form id="f-project">
+    ${mayCreate ? `<form id="f-project">
       <label for="pname">Start a new project</label>
       <input id="pname" placeholder="Project name" required>
       <button>Create project</button>
-    </form>
+    </form>` : ''}
   </main>`;
   document.getElementById('signout').onclick = () => sb.auth.signOut();
-  document.getElementById('f-project').addEventListener('submit', async e => {
+  document.getElementById('f-project')?.addEventListener('submit', async e => {
     e.preventDefault();
     const { data: id, error } = await sb.rpc('create_project', { p_name: document.getElementById('pname').value });
     if (error) return toast(friendly(error), true);
@@ -63,7 +66,7 @@ export async function loadProject(id, keepUI = false) {
 
     const set = new Set();
     state.fields.forEach(f => set.add(f.discipline));
-    state.members.forEach(m => (m.disciplines || []).forEach(d => set.add(d)));
+    state.members.forEach(m => (m.disciplines || []).forEach(d => d !== ALL_DISC && set.add(d)));
     const dOrder = new Map();
     state.fields.forEach(f => { if (!dOrder.has(f.discipline)) dOrder.set(f.discipline, f.discipline_order); });
     state.disc = [...set].sort((a, b) =>
@@ -77,6 +80,7 @@ export async function loadProject(id, keepUI = false) {
       state.search = '';
       state.drawer = null;
       state.editField = null;
+      state.editMember = null;
       state.selected = new Set();
       applyUI();                       // how this person last had the sheet set up
       state.cellA = state.cellB = null;
@@ -91,6 +95,7 @@ export async function loadProject(id, keepUI = false) {
 
 export function subscribe(id) {
   if (state.channel) sb.removeChannel(state.channel);
+  startPresence(id);
   const reload = () => {
     clearTimeout(subscribe.t);
     subscribe.t = setTimeout(() => state.projectId === id && loadProject(id, true), 500);
